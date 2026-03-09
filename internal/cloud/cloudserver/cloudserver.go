@@ -374,7 +374,7 @@ func jsonError(w http.ResponseWriter, status int, msg string) {
 
 func writeStoreError(w http.ResponseWriter, err error, fallback string) {
 	if errors.Is(err, cloudstore.ErrNotFound) {
-		jsonError(w, http.StatusNotFound, fallback)
+		jsonError(w, http.StatusNotFound, "not found")
 		return
 	}
 	if isDBConnectionError(err) {

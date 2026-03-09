@@ -18,11 +18,12 @@ func TestWriteStoreError(t *testing.T) {
 		err        error
 		fallback   string
 		statusCode int
+		errorBody  string
 	}{
-		{name: "not found", err: cloudstore.ErrNotFound, fallback: "chunk not found", statusCode: http.StatusNotFound},
-		{name: "wrapped not found", err: fmt.Errorf("lookup failed: %w", cloudstore.ErrNotFound), fallback: "missing", statusCode: http.StatusNotFound},
-		{name: "db down", err: errors.New("driver: bad connection"), fallback: "db", statusCode: http.StatusServiceUnavailable},
-		{name: "fallback internal", err: errors.New("boom"), fallback: "boom", statusCode: http.StatusInternalServerError},
+		{name: "not found", err: cloudstore.ErrNotFound, fallback: "chunk not found", statusCode: http.StatusNotFound, errorBody: "not found"},
+		{name: "wrapped not found", err: fmt.Errorf("lookup failed: %w", cloudstore.ErrNotFound), fallback: "missing", statusCode: http.StatusNotFound, errorBody: "not found"},
+		{name: "db down", err: errors.New("driver: bad connection"), fallback: "db", statusCode: http.StatusServiceUnavailable, errorBody: "database unavailable"},
+		{name: "fallback internal", err: errors.New("boom"), fallback: "boom", statusCode: http.StatusInternalServerError, errorBody: "boom"},
 	}
 
 	for _, tt := range tests {
@@ -40,21 +41,33 @@ func TestWriteStoreError(t *testing.T) {
 			if body["error"] == "" {
 				t.Fatal("expected error message in response")
 			}
+			if body["error"] != tt.errorBody {
+				t.Fatalf("error body=%q want %q", body["error"], tt.errorBody)
+			}
 		})
 	}
 }
 
 func TestIsDBConnectionError(t *testing.T) {
-	if !isDBConnectionError(sql.ErrConnDone) {
-		t.Fatal("expected sql.ErrConnDone to be db connection error")
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "sql err conn done", err: sql.ErrConnDone, want: true},
+		{name: "driver bad connection", err: errors.New("driver: bad connection"), want: true},
+		{name: "connection refused", err: errors.New("dial tcp: connection refused"), want: true},
+		{name: "generic validation error", err: errors.New("validation failed"), want: false},
+		{name: "err not found", err: cloudstore.ErrNotFound, want: false},
+		{name: "wrapped err not found", err: fmt.Errorf("wrapped: %w", cloudstore.ErrNotFound), want: false},
 	}
-	if !isDBConnectionError(errors.New("driver: bad connection")) {
-		t.Fatal("expected bad connection to be db connection error")
-	}
-	if isDBConnectionError(errors.New("validation failed")) {
-		t.Fatal("did not expect generic validation error to be db connection error")
-	}
-	if isDBConnectionError(fmt.Errorf("wrapped: %w", cloudstore.ErrNotFound)) {
-		t.Fatal("did not expect wrapped ErrNotFound to be db connection error")
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isDBConnectionError(tt.err)
+			if got != tt.want {
+				t.Fatalf("isDBConnectionError(%v)=%v want %v", tt.err, got, tt.want)
+			}
+		})
 	}
 }

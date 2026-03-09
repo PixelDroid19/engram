@@ -272,7 +272,7 @@ func (s *CloudServer) handlePullChunk(w http.ResponseWriter, r *http.Request) {
 
 	data, err := s.store.GetChunk(userID, chunkID)
 	if err != nil {
-		writeStoreError(w, err, "chunk not found")
+		writeStoreError(w, err, "failed to fetch chunk")
 		return
 	}
 	if data == nil {
