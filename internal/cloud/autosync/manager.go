@@ -15,6 +15,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math"
 	"math/rand"
 	"sync"
@@ -109,6 +110,7 @@ type Manager struct {
 	store     LocalStore
 	transport CloudTransport
 	cfg       Config
+	logger    *slog.Logger
 
 	mu        sync.RWMutex
 	status    Status
@@ -149,6 +151,7 @@ func New(localStore LocalStore, transport CloudTransport, cfg Config) *Manager {
 		store:     localStore,
 		transport: transport,
 		cfg:       cfg,
+		logger:    slog.Default().With("component", "autosync"),
 		status:    Status{Phase: PhaseIdle},
 		dirtyCh:   make(chan struct{}, 1),
 	}
@@ -174,7 +177,16 @@ func (m *Manager) Status() Status {
 // Run is the main loop. It blocks until the context is cancelled.
 // On shutdown it releases the lease and returns.
 func (m *Manager) Run(ctx context.Context) {
-	defer m.releaseLease()
+	m.logger.Info("manager started",
+		"target_key", m.cfg.TargetKey,
+		"poll_interval", m.cfg.PollInterval,
+		"push_batch", m.cfg.PushBatchSize,
+		"pull_batch", m.cfg.PullBatchSize,
+	)
+	defer func() {
+		m.logger.Info("manager stopped", "target_key", m.cfg.TargetKey)
+		m.releaseLease()
+	}()
 
 	debounce := time.NewTimer(m.cfg.DebounceDuration)
 	if !debounce.Stop() {
@@ -222,12 +234,20 @@ func (m *Manager) cycle(ctx context.Context) {
 	m.mu.RUnlock()
 
 	if failures >= m.cfg.MaxConsecutiveFailures {
+		m.logger.Warn("max failures reached, entering backoff",
+			"consecutive_failures", failures,
+			"max", m.cfg.MaxConsecutiveFailures,
+		)
 		m.setPhase(PhaseBackoff)
 		return
 	}
 
 	// Respect backoff timing.
 	if backoffUntil != nil && time.Now().Before(*backoffUntil) {
+		m.logger.Debug("skipping cycle, in backoff",
+			"backoff_until", backoffUntil,
+			"consecutive_failures", failures,
+		)
 		m.setPhase(PhaseBackoff)
 		return
 	}
@@ -235,7 +255,12 @@ func (m *Manager) cycle(ctx context.Context) {
 	// Acquire lease.
 	now := time.Now().UTC()
 	acquired, err := m.store.AcquireSyncLease(m.cfg.TargetKey, m.cfg.LeaseOwner, m.cfg.LeaseInterval, now)
-	if err != nil || !acquired {
+	if err != nil {
+		m.logger.Warn("lease acquisition error", "error", err)
+		return
+	}
+	if !acquired {
+		m.logger.Debug("lease held by another worker, skipping cycle")
 		return
 	}
 	m.mu.Lock()
@@ -243,17 +268,21 @@ func (m *Manager) cycle(ctx context.Context) {
 	m.mu.Unlock()
 
 	// Push, then pull.
+	start := time.Now()
 	if err := m.push(ctx); err != nil {
+		m.logger.Warn("push failed", "error", err, "elapsed", time.Since(start))
 		m.recordFailure(fmt.Sprintf("push: %v", err))
 		return
 	}
 
 	if err := m.pull(ctx); err != nil {
+		m.logger.Warn("pull failed", "error", err, "elapsed", time.Since(start))
 		m.recordFailure(fmt.Sprintf("pull: %v", err))
 		return
 	}
 
 	// Success — mark healthy.
+	m.logger.Debug("cycle complete", "elapsed", time.Since(start))
 	m.recordSuccess()
 }
 
@@ -278,8 +307,10 @@ func (m *Manager) push(ctx context.Context) error {
 		return fmt.Errorf("list pending: %w", err)
 	}
 	if len(pending) == 0 {
+		m.logger.Debug("push skipped, no pending mutations")
 		return nil
 	}
+	m.logger.Debug("pushing mutations", "count", len(pending))
 
 	groups := make(map[string][]store.SyncMutation)
 	order := make([]string, 0)
@@ -313,6 +344,7 @@ func (m *Manager) push(ctx context.Context) error {
 		if err := m.store.AckSyncMutationSeqs(m.cfg.TargetKey, seqs); err != nil {
 			return fmt.Errorf("ack project %q: %w", project, err)
 		}
+		m.logger.Debug("pushed batch", "project", project, "mutations", len(entries))
 	}
 
 	return nil
@@ -333,6 +365,7 @@ func (m *Manager) pull(ctx context.Context) error {
 	}
 
 	sinceSeq := state.LastPulledSeq
+	totalPulled := 0
 
 	for {
 		if ctx.Err() != nil {
@@ -361,11 +394,18 @@ func (m *Manager) pull(ctx context.Context) error {
 			if rm.Seq > sinceSeq {
 				sinceSeq = rm.Seq
 			}
+			totalPulled++
 		}
 
 		if !resp.HasMore {
 			break
 		}
+	}
+
+	if totalPulled > 0 {
+		m.logger.Debug("pull complete", "mutations_applied", totalPulled, "last_seq", sinceSeq)
+	} else {
+		m.logger.Debug("pull skipped, already up to date", "last_seq", sinceSeq)
 	}
 
 	return nil
@@ -396,6 +436,12 @@ func (m *Manager) recordFailure(msg string) {
 	}
 	m.mu.Unlock()
 
+	m.logger.Warn("sync failure recorded",
+		"error", msg,
+		"consecutive_failures", failures,
+		"backoff_until", bu,
+	)
+
 	// Persist degraded state to store (best-effort).
 	_ = m.store.MarkSyncFailure(m.cfg.TargetKey, msg, bu)
 }
@@ -409,6 +455,8 @@ func (m *Manager) recordSuccess() {
 	m.status.BackoffUntil = nil
 	m.status.LastSyncAt = &now
 	m.mu.Unlock()
+
+	m.logger.Info("sync healthy", "last_sync_at", now)
 
 	// Persist healthy state to store (best-effort).
 	_ = m.store.MarkSyncHealthy(m.cfg.TargetKey)
