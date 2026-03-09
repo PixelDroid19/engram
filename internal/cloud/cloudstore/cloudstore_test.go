@@ -354,6 +354,9 @@ func TestObservationSoftDelete(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error getting soft-deleted observation")
 	}
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for soft-deleted observation, got %v", err)
+	}
 
 	// RecentObservations should not include it.
 	recent, err := cs.RecentObservations(u.ID, "", "", 10)
@@ -508,6 +511,40 @@ func TestGetChunk(t *testing.T) {
 	}
 }
 
+func TestGetChunkNotFoundReturnsErrNotFound(t *testing.T) {
+	cs := newTestStore(t)
+
+	u, err := cs.CreateUser("alice", "alice@example.com", "secret123")
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	_, err = cs.GetChunk(u.ID, "missing")
+	if err == nil {
+		t.Fatal("expected not found error for missing chunk")
+	}
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestGetPromptNotFoundReturnsErrNotFound(t *testing.T) {
+	cs := newTestStore(t)
+
+	u, err := cs.CreateUser("alice", "alice@example.com", "secret123")
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	_, err = cs.GetPrompt(u.ID, 9999)
+	if err == nil {
+		t.Fatal("expected not found error for missing prompt")
+	}
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
 func TestSyncedChunks(t *testing.T) {
 	cs := newTestStore(t)
 
@@ -606,6 +643,9 @@ func TestDataIsolation(t *testing.T) {
 		_, err = cs.GetObservation(bob.ID, aliceObs[0].ID)
 		if err == nil {
 			t.Fatal("bob should NOT be able to get alice's observation")
+		}
+		if !errors.Is(err, ErrNotFound) {
+			t.Fatalf("expected ErrNotFound for cross-user observation access, got %v", err)
 		}
 	}
 

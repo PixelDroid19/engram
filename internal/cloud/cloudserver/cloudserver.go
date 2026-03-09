@@ -164,6 +164,18 @@ func (s *CloudServer) handleRegister(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "username, email, and password are required")
 		return
 	}
+	if !ValidateUsername(body.Username) {
+		jsonError(w, http.StatusBadRequest, "invalid username")
+		return
+	}
+	if !ValidateEmail(body.Email) {
+		jsonError(w, http.StatusBadRequest, "invalid email")
+		return
+	}
+	if !ValidatePassword(body.Password) {
+		jsonError(w, http.StatusBadRequest, "invalid password")
+		return
+	}
 
 	result, err := s.auth.Register(body.Username, body.Email, body.Password)
 	if err != nil {
@@ -297,9 +309,19 @@ func (s *CloudServer) handleRevokeAPIKey(w http.ResponseWriter, r *http.Request)
 func (s *CloudServer) handleSearch(w http.ResponseWriter, r *http.Request) {
 	userID := getUserID(r)
 
-	query := r.URL.Query().Get("q")
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
 	if query == "" {
 		jsonError(w, http.StatusBadRequest, "q parameter is required")
+		return
+	}
+	if !ValidateSearchQuery(query) {
+		jsonError(w, http.StatusBadRequest, "q parameter is too long")
+		return
+	}
+
+	limit := queryInt(r, "limit", 10)
+	if !ValidateSearchLimit(limit) {
+		jsonError(w, http.StatusBadRequest, "limit must be between 1 and 100")
 		return
 	}
 
@@ -307,7 +329,7 @@ func (s *CloudServer) handleSearch(w http.ResponseWriter, r *http.Request) {
 		Type:    r.URL.Query().Get("type"),
 		Project: r.URL.Query().Get("project"),
 		Scope:   r.URL.Query().Get("scope"),
-		Limit:   queryInt(r, "limit", 10),
+		Limit:   limit,
 	})
 	if err != nil {
 		writeStoreError(w, err, err.Error())
@@ -351,6 +373,10 @@ func jsonError(w http.ResponseWriter, status int, msg string) {
 }
 
 func writeStoreError(w http.ResponseWriter, err error, fallback string) {
+	if errors.Is(err, cloudstore.ErrNotFound) {
+		jsonError(w, http.StatusNotFound, fallback)
+		return
+	}
 	if isDBConnectionError(err) {
 		jsonError(w, http.StatusServiceUnavailable, "database unavailable")
 		return

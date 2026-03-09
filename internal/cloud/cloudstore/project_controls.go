@@ -9,6 +9,7 @@ import (
 )
 
 var ErrProjectSyncPaused = errors.New("cloudstore: project sync paused")
+var ErrNotFound = errors.New("cloudstore: not found")
 
 type ProjectSyncControl struct {
 	Project      string  `json:"project"`

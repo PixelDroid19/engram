@@ -306,6 +306,48 @@ func TestRegisterMissingFields(t *testing.T) {
 	}
 }
 
+func TestRegisterInvalidUsername(t *testing.T) {
+	srv, _ := testSetup(t)
+	h := srv.Handler()
+
+	body := `{"username":"ab","email":"bob@test.com","password":"password123"}`
+	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("register invalid username: expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRegisterInvalidEmail(t *testing.T) {
+	srv, _ := testSetup(t)
+	h := srv.Handler()
+
+	body := `{"username":"bob-user","email":"bob@.test.com","password":"password123"}`
+	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("register invalid email: expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRegisterInvalidPasswordLength(t *testing.T) {
+	srv, _ := testSetup(t)
+	h := srv.Handler()
+
+	body := `{"username":"bob-user","email":"bob@test.com","password":"short"}`
+	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("register invalid password: expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestRegisterWeakPassword(t *testing.T) {
 	srv, _ := testSetup(t)
 	h := srv.Handler()
@@ -997,6 +1039,37 @@ func TestSearchNoResultsReturnsEmptyArray(t *testing.T) {
 	}
 	if len(results) != 0 {
 		t.Fatalf("search no results: expected empty array, got %d results", len(results))
+	}
+}
+
+func TestSearchRejectsTooLongQuery(t *testing.T) {
+	srv, _ := testSetup(t)
+	h := srv.Handler()
+
+	result := registerUser(t, h, "longqueryuser", "longquery@test.com", "password123")
+	q := strings.Repeat("q", 501)
+
+	req := authReq(http.MethodGet, "/sync/search?q="+q, "", result.AccessToken)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("search long query: expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSearchRejectsInvalidLimit(t *testing.T) {
+	srv, _ := testSetup(t)
+	h := srv.Handler()
+
+	result := registerUser(t, h, "limituser", "limit@test.com", "password123")
+
+	req := authReq(http.MethodGet, "/sync/search?q=test&limit=0", "", result.AccessToken)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("search invalid limit: expected 400, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
