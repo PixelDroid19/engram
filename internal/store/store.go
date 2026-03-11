@@ -260,6 +260,19 @@ func DefaultConfig() (Config, error) {
 	}, nil
 }
 
+// FallbackConfig returns a Config with the given DataDir and default values.
+// Use this when DefaultConfig fails and you have resolved the home directory
+// through alternative means.
+func FallbackConfig(dataDir string) Config {
+	return Config{
+		DataDir:              dataDir,
+		MaxObservationLength: 50000,
+		MaxContextResults:    20,
+		MaxSearchResults:     20,
+		DedupeWindow:         15 * time.Minute,
+	}
+}
+
 // MaxObservationLength returns the configured maximum content length for observations.
 func (s *Store) MaxObservationLength() int {
 	return s.cfg.MaxObservationLength
